@@ -1,0 +1,102 @@
+import { NextResponse } from 'next/server';
+import {
+  initializeSheet,
+  getAllShipments,
+  addShipment,
+  updateShipment,
+  deleteShipment,
+  addMultipleShipments,
+} from '@/lib/googleSheets';
+
+// GET - Obtener todas las guías
+export async function GET() {
+  try {
+    await initializeSheet();
+    const shipments = await getAllShipments();
+    return NextResponse.json({ success: true, data: shipments });
+  } catch (error) {
+    console.error('Error in GET:', error);
+    return NextResponse.json(
+      { success: false, error: String(error) },
+      { status: 500 }
+    );
+  }
+}
+
+// POST - Agregar guía(s)
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const usuario = body.usuario || 'Usuario 1';
+
+    if (body.action === 'addSingle') {
+      await addShipment(body.data, usuario);
+      return NextResponse.json({ success: true });
+    }
+
+    if (body.action === 'addMultiple') {
+      await addMultipleShipments(body.data, usuario);
+      return NextResponse.json({ success: true });
+    }
+
+    return NextResponse.json(
+      { success: false, error: 'Invalid action' },
+      { status: 400 }
+    );
+  } catch (error) {
+    console.error('Error in POST:', error);
+    return NextResponse.json(
+      { success: false, error: String(error) },
+      { status: 500 }
+    );
+  }
+}
+
+// PUT - Actualizar guía
+export async function PUT(request: Request) {
+  try {
+    const shipment = await request.json();
+    const usuario = shipment.usuario || 'Usuario 2';
+    
+    // Obtener el estado anterior antes de actualizar
+    const allShipments = await getAllShipments();
+    const previousShipment = allShipments.find(s => s.id === shipment.id);
+    
+    // Actualizar con historial
+    await updateShipment(shipment, previousShipment, usuario);
+    
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error in PUT:', error);
+    return NextResponse.json(
+      { success: false, error: String(error) },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE - Eliminar guía
+export async function DELETE(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = parseInt(searchParams.get('id') || '0');
+    const guia = searchParams.get('guia') || 'Desconocida';
+    const usuario = searchParams.get('usuario') || 'Sistema';
+
+    if (!id) {
+      return NextResponse.json(
+        { success: false, error: 'ID is required' },
+        { status: 400 }
+      );
+    }
+
+    await deleteShipment(id, guia, usuario);
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error in DELETE:', error);
+    return NextResponse.json(
+      { success: false, error: String(error) },
+      { status: 500 }
+    );
+  }
+}
