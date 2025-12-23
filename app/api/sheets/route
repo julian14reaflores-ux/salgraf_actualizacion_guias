@@ -27,15 +27,14 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const usuario = body.usuario || 'Usuario 1';
 
     if (body.action === 'addSingle') {
-      await addShipment(body.data, usuario);
+      await addShipment(body.data);
       return NextResponse.json({ success: true });
     }
 
     if (body.action === 'addMultiple') {
-      await addMultipleShipments(body.data, usuario);
+      await addMultipleShipments(body.data);
       return NextResponse.json({ success: true });
     }
 
@@ -56,15 +55,7 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   try {
     const shipment = await request.json();
-    const usuario = shipment.usuario || 'Usuario 2';
-    
-    // Obtener el estado anterior antes de actualizar
-    const allShipments = await getAllShipments();
-    const previousShipment = allShipments.find(s => s.id === shipment.id);
-    
-    // Actualizar con historial
-    await updateShipment(shipment, previousShipment, usuario);
-    
+    await updateShipment(shipment);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error in PUT:', error);
@@ -80,8 +71,6 @@ export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const id = parseInt(searchParams.get('id') || '0');
-    const guia = searchParams.get('guia') || 'Desconocida';
-    const usuario = searchParams.get('usuario') || 'Sistema';
 
     if (!id) {
       return NextResponse.json(
@@ -90,7 +79,7 @@ export async function DELETE(request: Request) {
       );
     }
 
-    await deleteShipment(id, guia, usuario);
+    await deleteShipment(id);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error in DELETE:', error);
