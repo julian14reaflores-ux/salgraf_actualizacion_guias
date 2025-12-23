@@ -71,6 +71,13 @@ const auth = new google.auth.JWT({
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
+// Verificar credenciales en logs (solo para debug)
+console.log('🔐 Autenticación configurada:', {
+  email: credentials.client_email,
+  keyLength: credentials.private_key?.length || 0,
+  keyStart: credentials.private_key?.substring(0, 30) || 'NO KEY'
+});
+
 const sheets = google.sheets({ version: 'v4', auth });
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
 const SHEET_NAME = 'Guias';
