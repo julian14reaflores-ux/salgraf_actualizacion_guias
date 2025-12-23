@@ -4,10 +4,14 @@ import { google } from 'googleapis';
 //  🔐 MANEJO SEGURO DE CREDENCIALES
 // ==============================================
 function getCredentials() {
+  // Opción 1: Usar JSON completo
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     try {
       const parsed = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-      parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+      // Normalizar la clave privada
+      if (parsed.private_key) {
+        parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+      }
       return parsed;
     } catch (e) {
       console.error('Error parsing GOOGLE_CREDENTIALS_JSON:', e);
@@ -15,14 +19,40 @@ function getCredentials() {
     }
   }
 
+  // Opción 2: Usar variables separadas
   const privateKey = process.env.GOOGLE_PRIVATE_KEY;
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
 
   if (!privateKey || !clientEmail) {
-    throw new Error('❌ No se encontraron credenciales de Google');
+    throw new Error('❌ No se encontraron credenciales de Google. Verifica GOOGLE_PRIVATE_KEY y GOOGLE_CLIENT_EMAIL');
   }
 
-  let normalizedKey = privateKey.replace(/\\n/g, '\n').trim();
+  // Normalizar la clave privada - múltiples intentos
+  let normalizedKey = privateKey;
+  
+  // Si tiene \\n literales, reemplazarlos
+  if (normalizedKey.includes('\\n')) {
+    normalizedKey = normalizedKey.replace(/\\n/g, '\n');
+  }
+  
+  // Si NO tiene saltos de línea, intentar agregarlos
+  if (!normalizedKey.includes('\n') && normalizedKey.includes('-----BEGIN PRIVATE KEY-----')) {
+    // La clave está en una sola línea, necesitamos separarla
+    normalizedKey = normalizedKey
+      .replace('-----BEGIN PRIVATE KEY-----', '-----BEGIN PRIVATE KEY-----\n')
+      .replace('-----END PRIVATE KEY-----', '\n-----END PRIVATE KEY-----');
+  }
+  
+  // Quitar comillas extras si existen
+  normalizedKey = normalizedKey.replace(/^["']|["']$/g, '');
+  
+  // Asegurar que termina con salto de línea
+  if (!normalizedKey.endsWith('\n')) {
+    normalizedKey += '\n';
+  }
+
+  console.log('🔑 Clave privada normalizada. Longitud:', normalizedKey.length);
+  console.log('📧 Client email:', clientEmail);
 
   return {
     client_email: clientEmail,
