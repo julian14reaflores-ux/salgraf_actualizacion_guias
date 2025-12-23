@@ -1,0 +1,492 @@
+import { google } from 'googleapis';
+
+// ==============================================
+//  📝 MANEJO SEGURO DE CREDENCIALES
+// ==============================================
+function getCredentials() {
+  if (process.env.GOOGLE_CREDENTIALS_JSON) {
+    try {
+      const parsed = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+      parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+      return parsed;
+    } catch (e) {
+      console.error('Error parsing GOOGLE_CREDENTIALS_JSON:', e);
+      throw e;
+    }
+  }
+
+  const privateKey = process.env.GOOGLE_PRIVATE_KEY;
+  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+
+  if (!privateKey || !clientEmail) {
+    throw new Error('❌ No se encontraron credenciales de Google');
+  }
+
+  let normalizedKey = privateKey.replace(/\\n/g, '\n').trim();
+
+  return {
+    client_email: clientEmail,
+    private_key: normalizedKey,
+  };
+}
+
+// ==============================================
+//  ⚙️ AUTENTICACIÓN CON GOOGLE SHEETS API
+// ==============================================
+const credentials = getCredentials();
+
+const auth = new google.auth.JWT({
+  email: credentials.client_email,
+  key: credentials.private_key,
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
+
+const sheets = google.sheets({ version: 'v4', auth });
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
+const SHEET_NAME = 'Guias';
+const HISTORY_SHEET_NAME = 'Historial';
+
+// ==============================================
+//  📦 INTERFACES DE DATOS
+// ==============================================
+export interface Shipment {
+  id: number;
+  guiaOriginal: string;
+  fechaCarga: string;
+  fechaEnvio: string;
+  guiaRec: string;
+  guiaSinlc: string;
+  recuperado: string;
+  fechaRecuperacion: string;
+  observacion: string;
+  regional: string;
+  estado: string;
+  contadorGestiones: number;
+}
+
+export interface HistoryEntry {
+  fechaHora: string;
+  idGuia: number;
+  guiaOriginal: string;
+  usuario: string;
+  campoModificado: string;
+  valorAnterior: string;
+  valorNuevo: string;
+}
+
+// ==============================================
+//  📋 FUNCIÓN PARA REGISTRAR CAMBIOS
+// ==============================================
+export async function logChange(
+  idGuia: number,
+  guiaOriginal: string,
+  usuario: string,
+  campoModificado: string,
+  valorAnterior: string,
+  valorNuevo: string
+): Promise<void> {
+  try {
+    // Obtener fecha/hora en zona horaria de Ecuador (UTC-5)
+    const now = new Date();
+    const ecuadorTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Guayaquil' }));
+    
+    const dia = String(ecuadorTime.getDate()).padStart(2, '0');
+    const mes = String(ecuadorTime.getMonth() + 1).padStart(2, '0');
+    const anio = ecuadorTime.getFullYear();
+    const hora = String(ecuadorTime.getHours()).padStart(2, '0');
+    const minuto = String(ecuadorTime.getMinutes()).padStart(2, '0');
+    const segundo = String(ecuadorTime.getSeconds()).padStart(2, '0');
+    
+    const fechaHora = `${dia}/${mes}/${anio} ${hora}:${minuto}:${segundo}`;
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${HISTORY_SHEET_NAME}!A:G`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [[
+          fechaHora,
+          idGuia,
+          guiaOriginal,
+          usuario,
+          campoModificado,
+          valorAnterior || '-',
+          valorNuevo || '-'
+        ]],
+      },
+    });
+  } catch (error) {
+    console.error('Error logging change:', error);
+    // No lanzar error para no interrumpir el flujo principal
+  }
+}
+
+// ==============================================
+//  📖 OBTENER HISTORIAL DE UNA GUÍA
+// ==============================================
+export async function getShipmentHistory(idGuia: number): Promise<HistoryEntry[]> {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${HISTORY_SHEET_NAME}!A2:G`,
+    });
+
+    if (!response.data.values) return [];
+
+    return response.data.values
+      .filter(row => parseInt(row[1]) === idGuia)
+      .map(row => ({
+        fechaHora: row[0] || '',
+        idGuia: parseInt(row[1]) || 0,
+        guiaOriginal: row[2] || '',
+        usuario: row[3] || '',
+        campoModificado: row[4] || '',
+        valorAnterior: row[5] || '',
+        valorNuevo: row[6] || '',
+      }));
+  } catch (error) {
+    console.error('Error getting history:', error);
+    return [];
+  }
+}
+
+// ==============================================
+//  🚀 FUNCIONES CRUD PARA GOOGLE SHEETS
+// ==============================================
+export async function initializeSheet() {
+  try {
+    // Inicializar hoja de Guías
+    const responseGuias = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A1:L1`,
+    });
+
+    if (!responseGuias.data.values || responseGuias.data.values.length === 0) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${SHEET_NAME}!A1:L1`,
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [[
+            'ID',
+            'Guía Original',
+            'Fecha Carga',
+            'Fecha Envío',
+            'Guía REC',
+            'Guía SINLC',
+            'Estado Final',
+            'Fecha Recuperación',
+            'Regional',
+            'Observación',
+            'Estado',
+            'Contador Gestiones'
+          ]],
+        },
+      });
+    }
+
+    // Inicializar hoja de Historial
+    try {
+      const responseHistorial = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${HISTORY_SHEET_NAME}!A1:G1`,
+      });
+
+      if (!responseHistorial.data.values || responseHistorial.data.values.length === 0) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `${HISTORY_SHEET_NAME}!A1:G1`,
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: [[
+              'Fecha y Hora',
+              'ID Guía',
+              'Guía Original',
+              'Usuario',
+              'Campo Modificado',
+              'Valor Anterior',
+              'Valor Nuevo'
+            ]],
+          },
+        });
+      }
+    } catch (error) {
+      // Si la hoja no existe, crearla
+      console.log('Creando hoja de Historial...');
+    }
+
+    console.log('✅ Hojas inicializadas correctamente');
+  } catch (error) {
+    console.error('❌ Error initializing sheets:', error);
+    throw error;
+  }
+}
+
+export async function getAllShipments(): Promise<Shipment[]> {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A2:L`,
+    });
+
+    if (!response.data.values) return [];
+
+    return response.data.values.map((row) => ({
+      id: parseInt(row[0]) || 0,
+      guiaOriginal: row[1] || '',
+      fechaCarga: row[2] || '',
+      fechaEnvio: row[3] || '',
+      guiaRec: row[4] || '',
+      guiaSinlc: row[5] || '',
+      recuperado: row[6] || '',
+      fechaRecuperacion: row[7] || '',
+      regional: row[8] || '',
+      observacion: row[9] || '',
+      estado: row[10] || 'sin-procesar',
+      contadorGestiones: parseInt(row[11]) || 0,
+    }));
+  } catch (error) {
+    console.error('Error getting shipments:', error);
+    throw error;
+  }
+}
+
+export async function addShipment(shipment: Shipment, usuario: string = 'Usuario 1'): Promise<void> {
+  try {
+    let fechaCargaFormateada = shipment.fechaCarga;
+    
+    // Si viene en formato ISO, convertir usando zona horaria de Ecuador
+    if (shipment.fechaCarga && shipment.fechaCarga.includes('T')) {
+      const date = new Date(shipment.fechaCarga);
+      const ecuadorTime = new Date(date.toLocaleString('en-US', { timeZone: 'America/Guayaquil' }));
+      const day = String(ecuadorTime.getDate()).padStart(2, '0');
+      const month = String(ecuadorTime.getMonth() + 1).padStart(2, '0');
+      const year = ecuadorTime.getFullYear();
+      fechaCargaFormateada = `${day}/${month}/${year}`;
+    }
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A:L`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [[
+          shipment.id,
+          shipment.guiaOriginal,
+          fechaCargaFormateada,
+          shipment.fechaEnvio,
+          shipment.guiaRec,
+          shipment.guiaSinlc,
+          shipment.recuperado,
+          shipment.fechaRecuperacion,
+          shipment.regional,
+          shipment.observacion,
+          shipment.estado,
+          shipment.contadorGestiones,
+        ]],
+      },
+    });
+
+    // Registrar en historial
+    await logChange(
+      shipment.id,
+      shipment.guiaOriginal,
+      usuario,
+      'Guía Creada',
+      '',
+      'Nueva guía agregada al sistema'
+    );
+  } catch (error) {
+    console.error('Error adding shipment:', error);
+    throw error;
+  }
+}
+
+export async function updateShipment(
+  shipment: Shipment,
+  previousShipment?: Shipment,
+  usuario: string = 'Usuario 2'
+): Promise<void> {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A:A`,
+    });
+
+    const rowIndex = response.data.values?.findIndex(
+      (row) => parseInt(row[0]) === shipment.id
+    );
+
+    if (rowIndex === undefined || rowIndex === -1) {
+      throw new Error('Shipment not found');
+    }
+
+    const rowNumber = rowIndex + 1;
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A${rowNumber}:L${rowNumber}`,
+      valueInputOption: 'RAW',
+      requestBody: {
+        values: [[
+          shipment.id,
+          shipment.guiaOriginal,
+          shipment.fechaCarga,
+          shipment.fechaEnvio,
+          shipment.guiaRec,
+          shipment.guiaSinlc,
+          shipment.recuperado,
+          shipment.fechaRecuperacion,
+          shipment.regional,
+          shipment.observacion,
+          shipment.estado,
+          shipment.contadorGestiones,
+        ]],
+      },
+    });
+
+    // Registrar cambios en historial
+    if (previousShipment) {
+      const fields = [
+        { key: 'fechaEnvio', label: 'Fecha Envío' },
+        { key: 'guiaRec', label: 'Guía REC' },
+        { key: 'guiaSinlc', label: 'Guía SINLC' },
+        { key: 'recuperado', label: 'Estado Final' },
+        { key: 'fechaRecuperacion', label: 'Fecha Recuperación' },
+        { key: 'regional', label: 'Regional' },
+        { key: 'observacion', label: 'Observación' },
+      ];
+
+      for (const field of fields) {
+        const oldValue = previousShipment[field.key as keyof Shipment];
+        const newValue = shipment[field.key as keyof Shipment];
+        
+        if (oldValue !== newValue) {
+          await logChange(
+            shipment.id,
+            shipment.guiaOriginal,
+            usuario,
+            field.label,
+            String(oldValue || '-'),
+            String(newValue || '-')
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error updating shipment:', error);
+    throw error;
+  }
+}
+
+export async function deleteShipment(id: number, guiaOriginal: string, usuario: string = 'Sistema'): Promise<void> {
+  try {
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID,
+    });
+
+    const sheet = spreadsheet.data.sheets?.find(
+      (s) => s.properties?.title === SHEET_NAME
+    );
+
+    if (!sheet || sheet.properties?.sheetId === undefined) {
+      throw new Error(`No se encontró la hoja "${SHEET_NAME}"`);
+    }
+
+    const sheetId = sheet.properties.sheetId;
+
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A:A`,
+    });
+
+    const rowIndex = response.data.values?.findIndex(
+      (row) => parseInt(row[0]) === id
+    );
+
+    if (rowIndex === undefined || rowIndex === -1) {
+      throw new Error('Guía no encontrada');
+    }
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [
+          {
+            deleteDimension: {
+              range: {
+                sheetId: sheetId,
+                dimension: 'ROWS',
+                startIndex: rowIndex,
+                endIndex: rowIndex + 1,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    // Registrar eliminación
+    await logChange(
+      id,
+      guiaOriginal,
+      usuario,
+      'Guía Eliminada',
+      'Existente',
+      'Eliminada del sistema'
+    );
+  } catch (error) {
+    console.error('Error deleting shipment:', error);
+    throw error;
+  }
+}
+
+export async function addMultipleShipments(shipments: Shipment[], usuario: string = 'Usuario 1'): Promise<void> {
+  try {
+    const values = shipments.map((shipment) => {
+      let fechaCargaFormateada = shipment.fechaCarga;
+      if (shipment.fechaCarga && shipment.fechaCarga.includes('T')) {
+        const date = new Date(shipment.fechaCarga);
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        fechaCargaFormateada = `${day}/${month}/${year}`;
+      }
+
+      return [
+        shipment.id,
+        shipment.guiaOriginal,
+        fechaCargaFormateada,
+        shipment.fechaEnvio,
+        shipment.guiaRec,
+        shipment.guiaSinlc,
+        shipment.recuperado,
+        shipment.fechaRecuperacion,
+        shipment.regional,
+        shipment.observacion,
+        shipment.estado,
+        shipment.contadorGestiones,
+      ];
+    });
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A:L`,
+      valueInputOption: 'RAW',
+      requestBody: { values },
+    });
+
+    // Registrar carga masiva
+    await logChange(
+      0,
+      'CARGA MASIVA',
+      usuario,
+      'Carga Masiva',
+      '',
+      `${shipments.length} guías agregadas`
+    );
+  } catch (error) {
+    console.error('Error adding multiple shipments:', error);
+    throw error;
+  }
+}
